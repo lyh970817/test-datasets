@@ -15,10 +15,13 @@ The generator is deterministic: a re-run with the same seed reproduces byte-iden
 
 | Path | Size | Contents |
 | --- | --- | --- |
-| `genotypes/study_afr.bed` | 123.8 KB | study stratum 2 (AFR-drawn) genotypes |
+| `genotypes/study_afr.bed` | 123.8 KB | study stratum 2 (AFR-drawn, 125 samples) genotypes |
 | `genotypes/study_afr.bim` | 106.8 KB | study stratum 2 variants |
 | `genotypes/study_afr.fam` | 3.3 KB | study stratum 2 samples |
-| `genotypes/study_eur.bed` | 123.8 KB | study stratum 1 (EUR-drawn) genotypes |
+| `genotypes/study_csa.bed` | 11.6 KB | study stratum 3 (CSA-drawn, 12 samples) genotypes |
+| `genotypes/study_csa.bim` | 106.8 KB | study stratum 3 variants |
+| `genotypes/study_csa.fam` | 324 B | study stratum 3 samples |
+| `genotypes/study_eur.bed` | 123.8 KB | study stratum 1 (EUR-drawn, 125 samples) genotypes |
 | `genotypes/study_eur.bim` | 106.8 KB | study stratum 1 variants |
 | `genotypes/study_eur.fam` | 3.3 KB | study stratum 1 samples |
 | `highld/high_ld_regions_b38.bed` | 715 B | GRCh38 long-range-LD intervals |
@@ -31,9 +34,9 @@ The generator is deterministic: a re-run with the same seed reproduces byte-iden
 | `reference/ref_panel.bim` | 98.1 KB | reference panel variants |
 | `reference/ref_panel.fam` | 6.1 KB | reference panel samples |
 | `reference/ref_pop.tsv` | 5.9 KB | `FID IID pop super_pop` for the reference panel |
-| `samplesheet.csv` | 196 B | pipeline input samplesheet |
+| `samplesheet.csv` | 282 B | pipeline input samplesheet |
 
-Total, excluding this README: **806.3 KB**.
+Total, excluding this README: **925.1 KB**.
 
 ## Conventions
 
@@ -66,9 +69,10 @@ Variant IDs are rsID-style and strictly increasing with genomic order. The 50 ch
 | --- | --- | --- |
 | `genotypes/study_eur.fam` | 125 | 64 / 61 |
 | `genotypes/study_afr.fam` | 125 | 64 / 61 |
+| `genotypes/study_csa.fam` | 12 | 5 / 7 |
 | `reference/ref_panel.fam` | 250 | 130 / 120 |
 
-Study sample IDs are `<PREFIX>_S<nnn>` with `PREFIX` = `EUR`/`AFR` and `nnn` = 001-125; reference sample IDs are `<SUBPOP>_<nnn>`. The numeric part of a study ID is stable across regenerations, so the defect IDs below never move.
+Study sample IDs are `<PREFIX>_S<nnn>` with `PREFIX` = `EUR` and `nnn` = 001-125 in `study_eur`, `PREFIX` = `AFR` and `nnn` = 001-125 in `study_afr`, `PREFIX` = `CSA` and `nnn` = 001-012 in `study_csa`; reference sample IDs are `<SUBPOP>_<nnn>`. The numeric part of a study ID is stable across regenerations, so the defect IDs below never move.
 
 ### `samplesheet.csv`
 
@@ -76,6 +80,7 @@ Study sample IDs are `<PREFIX>_S<nnn>` with `PREFIX` = `EUR`/`AFR` and `nnn` = 0
 id,ancestry,bed,bim,fam
 study_eur,EUR,genotypes/study_eur.bed,genotypes/study_eur.bim,genotypes/study_eur.fam
 study_afr,AFR,genotypes/study_afr.bed,genotypes/study_afr.bim,genotypes/study_afr.fam
+study_csa,CSA,genotypes/study_csa.bed,genotypes/study_csa.bim,genotypes/study_csa.fam
 ```
 
 Header is exactly `id,ancestry,bed,bim,fam`; the three path columns are **relative to this directory** (`data/gwasqc/`).
@@ -94,30 +99,31 @@ Allele frequencies come from a two-level Balding-Nichols model: one ancestral fr
 
 `reference/ref_pop.tsv` is tab-separated with the header `FID IID pop super_pop`; `reference/keep/<SUPERPOP>.keep` lists `FID IID` (space-separated, no header) for that super-population.
 
-Study strata are drawn from their matching super-population frequencies (`study_eur` from EUR, `study_afr` from AFR), so a reference-projected PCA should place them on top of the matching reference cluster -- except for the planted ancestry outliers.
+Study strata are drawn from their matching super-population frequencies (`study_eur` from EUR, `study_afr` from AFR, `study_csa` from CSA), so a reference-projected PCA should place them on top of the matching reference cluster -- except for the planted ancestry outliers.
 
 **Reference/study harmonisation.** Reference and study filesets share variant ID, position and alleles on all 3632 autosomal variants, with two documented exceptions that exist to exercise harmonisation:
 
-* **54 strand-flipped variants** (1.5% of autosomal variants): the study `.bim` carries the complement of the reference alleles (e.g. reference `A G` -> study `T C`) while the genotype dosages are unchanged, which is exactly what a strand flip looks like. All of them have unambiguous (non-`A/T`, non-`C/G`) allele pairs, so the flip is resolvable. Both strata flip the same variant set.
+* **54 strand-flipped variants** (1.5% of autosomal variants): the study `.bim` carries the complement of the reference alleles (e.g. reference `A G` -> study `T C`) while the genotype dosages are unchanged, which is exactly what a strand flip looks like. All of them have unambiguous (non-`A/T`, non-`C/G`) allele pairs, so the flip is resolvable. Every stratum flips the same variant set.
 * **40 strand-ambiguous variants** carry `A/T` or `C/G` alleles in both the reference and the study sets (never flipped). These are the ones an IUPAC/ambiguity check must refuse to resolve.
 
 Full ID lists: see `flipped variants` and `ambiguous variants` at the bottom of this file.
 
 ## Planted defects
 
-Every ID below is deterministic: the slot number in a study sample ID encodes its role, and both strata carry the same slots. Sample-level defect IDs are listed per stratum; variant-level defects hit the same variant IDs in both strata.
+Every ID below is deterministic: the slot number in a study sample ID encodes its role. The two 125-sample strata carry the same slots; the 12-sample stratum carries only the defects listed against its IDs. Sample-level defect IDs are listed per stratum, for the strata that carry the defect; variant-level defects hit the same variant IDs in every stratum.
 
 ### Sample-level
 
 | # | Defect | IDs | How it was planted | Expected QC outcome |
 | --- | --- | --- | --- | --- |
-| a1 | Sex mismatch: `.fam` female, genotypes male | `EUR_S010`; `AFR_S010` | `.fam` sex = 2; chrX non-PAR calls are hemizygous (no hets) and all 30 chrY variants are called | `--check-sex ycount` -> `PROBLEM`, X F ~ 1, YCOUNT high |
+| a1 | Sex mismatch: `.fam` female, genotypes male | `EUR_S010`; `AFR_S010`; `CSA_S010` | `.fam` sex = 2; chrX non-PAR calls are hemizygous (no hets) and all 30 chrY variants are called | `--check-sex ycount` -> `PROBLEM`, X F ~ 1, YCOUNT high |
 | a2 | Sex mismatch: `.fam` male, genotypes female | `EUR_S011`; `AFR_S011` | `.fam` sex = 1; chrX non-PAR calls are diploid/heterozygous and every chrY call is missing | `--check-sex ycount` -> `PROBLEM`, X F ~ 0, YCOUNT 0 |
-| b1 | Duplicate / MZ pair | `EUR_S020` + `EUR_S021`; `AFR_S020` + `AFR_S021` | the `S021` genotype vector is an exact copy of `S020` (all chromosomes) | KING kinship ~ 0.5, IBS0 = 0 -> duplicate/MZ call |
-| b2 | First-degree pair (parent-offspring) | `EUR_S030` + `EUR_S031`; `AFR_S030` + `AFR_S031` | `S031` inherits one autosomal allele from `S030` and one from the population pool at every autosomal variant; no pedigree in the `.fam` | KING kinship ~ 0.25 with IBS0 ~ 0 -> parent-offspring |
+| b1 | Duplicate / MZ pair | `EUR_S020` + `EUR_S021`; `AFR_S020` + `AFR_S021`; `CSA_S005` + `CSA_S006` | the second sample's genotype vector is an exact copy of the first's (all chromosomes) | KING kinship ~ 0.5, IBS0 = 0 -> duplicate/MZ call |
+| b2 | First-degree pair (parent-offspring) | `EUR_S030` + `EUR_S031`; `AFR_S030` + `AFR_S031` | the second sample inherits one autosomal allele from the first and one from the population pool at every autosomal variant; no pedigree in the `.fam` | KING kinship ~ 0.25 with IBS0 ~ 0 -> parent-offspring |
 | b3 | First-degree pair (full sibs) | `EUR_S032` + `EUR_S033`; `AFR_S032` + `AFR_S033` | two virtual, non-genotyped parents; both sibs inherit one allele from each at every autosomal variant | KING kinship ~ 0.25 with IBS0 > 0 -> full sibs |
 | c1 | High sample missingness | `EUR_S040` + `EUR_S041`; `AFR_S040` + `AFR_S041` | 15% and 22% of all calls set missing at random | `--missing` F_MISS > 0.10; removed by any `mind` <= 0.10 |
 | c2 | Borderline sample missingness | `EUR_S042`; `AFR_S042` | 5% of all calls set missing at random | F_MISS ~ 0.05: kept at `mind` 0.10, dropped at `mind` 0.02 |
+| c3 | Sparse sample: one missing call at a handful of variants | `CSA_S003` | exactly one genotype set missing at 5 autosomal variants outside every planted block (`rs1151545`, `rs1311999`, `rs1911972`, `rs2167038`, `rs2770893`), which adds 5/3962 to the sample's own F_MISS (the measured value below includes the calls the chr3/chr4 blocks assign to it at random) | the sample survives any `mind`; each of the 5 variants has F_MISS 1/n = 0.0833 in a 12-sample stratum, above `geno` 0.05, so they fall at geno although only one call is missing: the 1/n granularity of missingness at small n |
 | h | Ancestry outliers (wrong super-population) | `EUR_S050` (EAS), `EUR_S051` (AFR), `EUR_S052` (AMR), `AFR_S050` (EUR), `AFR_S051` (CSA), `AFR_S052` (EAS) | genotypes drawn from another super-population's frequencies while the samplesheet labels the stratum EUR / AFR | reference-projected PCA places them on the wrong cluster; ancestry assignment must not return the stratum label |
 
 ### Variant-level
@@ -127,23 +133,35 @@ Every ID below is deterministic: the slot number in a study sample ID encodes it
 | d1 | High variant missingness (block of 20) | `rs1395803`, `rs1396390`, `rs1396651`, `rs1397483`, `rs1397593`, `rs1398175`, `rs1398777`, `rs1399746`, `rs1400520`, `rs1401325`, `rs1401932`, `rs1402148`, `rs1403097`, `rs1403250`, `rs1403949`, `rs1404238`, `rs1405053`, `rs1405625`, `rs1405639`, `rs1406332` | chr3 block, 12-25% of samples set missing per variant (same variants in both strata) | `--missing` variant F_MISS > 0.10; removed by any `geno` <= 0.10 |
 | d2 | Borderline variant missingness | `rs1498627`, `rs1499588`, `rs1500478`, `rs1501405`, `rs1502040` | chr4, a planted rate of 4-6% of samples per variant, rounded to a whole number of samples (hence the measured range below) | F_MISS ~ 0.05: kept at `geno` 0.10, dropped at `geno` 0.02 |
 | e | Gross HWE violation | `rs1667531`, `rs1668208`, `rs1668410`, `rs1668428`, `rs1668730` | chr5, every sample forced heterozygous (observed het 1.00, expected 0.5) | `--hardy` p ~ 0 -> excluded by any HWE threshold |
-| f | MAF below 1% | `rs1746871`, `rs1746964`, `rs1747289`, `rs1748137`, `rs1748739`, `rs1749463` | chr6; every sample homozygous A2 except the first 1 (first three variants) or 2 (last three) of the fixed carriers `EUR_S060` + `EUR_S061`; `AFR_S060` + `AFR_S061` -- MAF 1/250 = 0.40% or 2/250 = 0.80% | `--freq` ALT_FREQS < 0.01 -> removed by `--maf 0.01` |
+| f | MAF below 1% | `rs1746871`, `rs1746964`, `rs1747289`, `rs1748137`, `rs1748739`, `rs1749463` | chr6; every sample homozygous A2 except the first 1 (first three variants) or 2 (last three) of the fixed carriers `EUR_S060` + `EUR_S061`; `AFR_S060` + `AFR_S061` -- MAF 1/250 = 0.40% or 2/250 = 0.80%; no carrier at all in `study_csa`, where the six variants are monomorphic (MAF 0) | `--freq` ALT_FREQS < 0.01 -> removed by `--maf 0.01` |
 | g | Variants inside a listed high-LD interval | see the high-LD table below | a dense block of 30 variants placed inside `hld_6_1_MHC` (`6:25400000-33400000`), plus whatever falls into the other intervals by chance | the high-LD exclusion step must drop them before LD pruning / PCA |
+
+### Small stratum
+
+`study_csa` has 12 samples, so every per-sample and per-variant rate is a multiple of 1/12 = 0.0833. Three consequences, all measured in the committed data and none of them defects of the fixture:
+
+* **One missing call is 8.3% of the samples**, above `geno` 0.05: the 5 sparse-sample variants (defect c3) and every variant of the chr4 borderline block (defect d2, whose planted 4-6% rounds to one missing call at n = 12) fall at `geno` here, while the borderline block survives in the 125-sample strata. A per-variant rate is a fraction of the samples, so this granularity is a property of the sample count; a per-sample rate (`mind`) is a fraction of the variants and is unaffected by it.
+* **The HWE plants (defect e) are not detectable at n = 12.** With every one of 12 samples heterozygous the exact-test p-value is of the order of 1e-3 (the all-heterozygous table itself has probability 1.5e-03 under HWE; plink2's value is in the verification below), nowhere near a 1e-10 threshold; `--hwe 1e-10` therefore excludes nothing in this stratum.
+* **MAF below 1% means monomorphic at n = 12** (the smallest non-zero MAF is 1/24 = 0.0417), so the planted rare variants (defect f) are written with no carrier and a number of unplanted variants are monomorphic by sampling chance; the measured count below is the real total that `--maf 0.01` removes.
+
+Its 12 samples also make it the stratum on which the `gwasqc` small-n route (reference-anchored sample QC) is exercised: LD pruning on so few samples is the failure the route exists to avoid.
 
 ### Measured values in the committed data
 
-| Statistic | `study_eur` | `study_afr` |
-| --- | --- | --- |
-| F_MISS of `*_S040` | 0.1499 | 0.1499 |
-| F_MISS of `*_S041` | 0.2201 | 0.2201 |
-| F_MISS of `*_S042` | 0.0500 | 0.0500 |
-| max variant F_MISS in the chr3 block | 0.2560 | 0.2480 |
-| min variant F_MISS in the chr3 block | 0.1600 | 0.1280 |
-| borderline variant F_MISS range | 0.0480-0.0640 | 0.0480-0.0640 |
-| planted rare-variant MAF range | 0.0040-0.0081 | 0.0040-0.0081 |
-| autosomal variants with MAF < 1% (planted + chance) | 8 | 7 |
-| autosomal variants with F_MISS > 10% | 20 | 20 |
-| samples with F_MISS > 10% | 2 | 2 |
+| Statistic | `study_eur` | `study_afr` | `study_csa` |
+| --- | --- | --- | --- |
+| F_MISS of `*_S040` | 0.1499 | 0.1499 | - |
+| F_MISS of `*_S041` | 0.2201 | 0.2201 | - |
+| F_MISS of `*_S042` | 0.0500 | 0.0500 | - |
+| F_MISS of the sparse sample `*_S003` | - | - | 0.00278 |
+| max variant F_MISS in the chr3 block | 0.2560 | 0.2480 | 0.2500 |
+| min variant F_MISS in the chr3 block | 0.1600 | 0.1280 | 0.0833 |
+| borderline variant F_MISS range | 0.0480-0.0640 | 0.0480-0.0640 | 0.0833-0.0833 |
+| planted rare-variant MAF range | 0.0040-0.0081 | 0.0040-0.0081 | 0.0000-0.0000 |
+| autosomal variants with MAF < 1% (planted + chance) | 8 | 7 | 236 |
+| autosomal variants with F_MISS > 10% | 20 | 20 | 18 |
+| autosomal variants with F_MISS > 5% | 24 | 23 | 30 |
+| samples with F_MISS > 10% | 2 | 2 | 0 |
 
 ## High-LD regions
 
@@ -371,6 +389,104 @@ HWE-conforming data).  `--indep-pairwise 1500 150 0.2` removes only 15 of 3632
 variants -- see the caveat about there being no LD structure.  Each of the five
 `keep/<SUPERPOP>.keep` files yields `--keep: 50 samples remaining`.
 
+### 11. `study_csa` -- the 12-sample stratum
+
+Verified separately, with
+`community.wave.seqera.io/library/plink2:2.0.0a.6.9--e6710830a4b7f0c6` (the
+same PLINK v2.0.0-a.6.9LM build, the image the pipeline pins); plink1.9 was
+not run on this stratum.
+
+```
+plink2 --bfile genotypes/study_csa --freq --missing --hardy --out out_csa
+```
+
+`12 samples (7 females, 5 males)`, `3962 variants`.  The six planted chr6
+rare variants have `ALT_FREQS 0`, `OBS_CT 24`; 236 autosomal variants are
+monomorphic in this stratum (the 6 plants plus 230 by sampling chance) and no
+other autosomal variant has MAF < 0.01, so `--maf 0.01` removes 236.  The
+five sparse-sample variants (`rs1151545`, `rs1311999`, `rs1911972`,
+`rs2167038`, `rs2770893`) each have `MISSING_CT 1`, `F_MISS 0.0833`, and
+`--export A` shows the missing call is `CSA_S003`'s at all five; `CSA_S003`
+itself has `F_MISS 0.00278` (11 of 3962: the 5 planted calls plus 6 that the
+chr3/chr4 blocks assign to it at random).  30 autosomal variants have
+`F_MISS > 0.05`: the 20 chr3 block variants (0.0833-0.25), the 5 chr4
+borderline variants (each exactly one missing call, 0.0833) and the 5
+sparse-sample variants.  The five chr5 HWE plants have `O(HET_A1) 1`,
+`E(HET_A1) 0.5`, `P 0.0018564`, and the smallest autosomal `P` in the stratum
+is 6.7e-4 (`rs2009918`), so `--hwe 1e-10` excludes nothing here.
+
+**Small-sample guards.** plink2 2.0.0a.6.9 refuses to impute allele
+frequencies or LD from fewer than 50 samples: `--check-sex`, `--het` and
+`--pca` stop with `Error: This run requires decent allele frequencies, but
+they aren't being loaded with --read-freq, and less than 50 samples are
+available to impute them from.`, and `--indep-pairwise` stops with `Error:
+This run estimates linkage disequilibrium between variants, but there are less
+than 50 samples to estimate from.`  The overrides are `--bad-freqs` for the
+first three and `--bad-ld` for pruning; a `--read-freq <file>` also lifts the
+frequency guard for the whole run, even when the file covers only the
+autosomes (chrX frequencies are then imputed from the 12 samples without
+further notice).
+
+Sex check:
+
+```
+plink2 --bfile genotypes/study_csa --split-par b38 --make-bed --out p2sx_csa
+plink2 --bfile p2sx_csa --bad-freqs --check-sex max-female-xf=0.2 min-male-xf=0.8 \
+       max-female-ycount=0 min-male-ycount=1 cols=+ycount --out p2cs_csa
+```
+
+`--split-par: 50 chromosome codes changed`, then `--check-sex: 250 chrX
+variants and 30 variants scanned, 1 problem detected`:
+
+```
+FID       IID       PEDSEX SNPSEX STATUS  F  YCOUNT YRATE
+CSA_S010  CSA_S010  2      1      PROBLEM 1  30     1
+```
+
+The females' F is 0.014 to 0.126 (below `max-female-xf` 0.2) and every
+genotype male has F 1 and YCOUNT 30.  `--read-freq` of the stratum's own
+`--freq` output, or of the autosomal CSA-reference frequencies, gives the same
+12 verdicts (F differs in the sixth decimal).  22 monomorphic chrX variants
+are skipped with a warning.
+
+Relatedness:
+
+```
+plink2 --bfile genotypes/study_csa --chr 1-22 --make-king-table --king-table-filter 0.08 --out king_csa
+```
+
+`1 relationship reported (65 filtered out)`:
+
+```
+IID1      IID2      NSNP  HETHET    IBS0  KINSHIP
+CSA_S006  CSA_S005  3623  0.360199  0     0.5
+```
+
+No other pair reaches 0.08.  KING needs no allele frequencies and runs bare
+at n = 12.
+
+Heterozygosity: `--het` bare is refused (above).  `--bad-freqs --het` gives
+mean F -0.046 over the 12 samples (the in-sample frequency estimate is biased
+at n = 12); `--het --read-freq` of the 50 CSA reference samples' `--freq`
+over the 3578 shared same-strand variants gives mean F -0.0006, and the
+reference samples themselves on that basis -0.0078, so a matched reference
+frequency file puts study and reference on one scale.
+
+LD pruning: `--bad-ld --indep-pairwise 1500 150 0.2 --chr 1-22` removes 3459
+of 3632 autosomal variants and keeps 173 (4.8%), on data with no LD structure
+at all: pairwise r^2 over 12 samples is inflated enough to prune almost
+everything.  This is the small-n pruning collapse the stratum exists to
+demonstrate; the 125-sample strata keep 3617 of 3632 with the same settings.
+
+Ancestry, by the pipeline's own projection recipe: reference
+`--maf 0.01 --freq counts --pca 6 allele-wts vcols=chrom,ref,alt` over the
+3578 autosomal variants whose alleles agree between study and reference (the
+54 documented flips excluded), then
+`--score <weights> 2 5 header-read no-mean-imputation variance-standardize --score-col-nums 6-11 --read-freq <counts>`
+for the reference and for `study_csa` alike.  Nearest-centroid assignment on
+PC1-PC4: reference self-assignment 250/250, and all 12 `study_csa` samples
+nearest the CSA centroid (distance 0.011-0.033).
+
 ### Not verified
 
 * **No Nextflow / nf-test run.** These fixtures have not yet been consumed by
@@ -385,6 +501,8 @@ variants -- see the caveat about there being no LD structure.  Each of the five
   and the high-LD exclusion beyond coordinate overlap.
 * **No MAF/HWE/missingness defects in the reference panel**, so a pipeline that
   QCs the reference has nothing to catch there.
+* **`study_csa` was checked with plink2 only** (section 11); the plink1.9
+  route of sections 2 and 8 was not repeated on it.
 
 
 ## Simplifications and caveats
@@ -396,6 +514,7 @@ variants -- see the caveat about there being no LD structure.  Each of the five
 * Relatedness is planted on the **autosomes**; the derived samples' chrX non-PAR and chrY genotypes are drawn independently.
 * Hemizygous calls (chrX non-PAR and chrY, for samples whose *genotypes* are male) are written as homozygotes, which is PLINK's haploid convention. Two PLINK warnings are therefore **expected and not fixture defects**: before the PAR split every male's diploid call at the 50 PAR variants counts as `het. haploid` (~1.2k calls), and after the split the ~80 that remain are defect a2's heterozygous chrX calls; `Nonmissing nonmale Y chromosome genotype(s) present` is defect a1.
 * Planted rare variants are set to a fixed carrier count rather than sampled, so their MAF is exact. A handful of *unplanted* variants also fall below MAF 1% by sampling chance; the measured counts above give the real totals.
+* The 12-sample stratum is small by design and behaves as small strata do: see *Small stratum* above for what its size does to the missingness, HWE and MAF filters.
 
 ## Appendix: variant ID lists
 

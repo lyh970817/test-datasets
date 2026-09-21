@@ -1,3 +1,4 @@
 id,ancestry,bed,bim,fam
 study_eur,EUR,genotypes/study_eur.bed,genotypes/study_eur.bim,genotypes/study_eur.fam
 study_afr,AFR,genotypes/study_afr.bed,genotypes/study_afr.bim,genotypes/study_afr.fam
+study_csa,CSA,genotypes/study_csa.bed,genotypes/study_csa.bim,genotypes/study_csa.fam

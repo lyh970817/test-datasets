@@ -27,11 +27,17 @@ Design notes
   the autosomes, except for a documented ~1.5% strand-flipped subset whose
   study alleles are the complement of the reference alleles.
 * Defects are planted into the study strata only; the reference panel is clean.
+* Two strata carry 125 samples and every defect; a third carries 12 samples
+  and a small subset (one sex mismatch, one duplicate pair, one sparse sample),
+  so that the pipeline's small-stratum route has a stratum to run on.  Each
+  stratum draws from its own random stream, so adding a stratum leaves the
+  bytes of the others unchanged.
 """
 
 from __future__ import annotations
 
 import argparse
+import math
 import random
 from pathlib import Path
 
@@ -84,26 +90,60 @@ SUB_POPS = {
 }
 REF_PER_SUBPOP = 25  # -> 50 reference samples per super-population, 250 total
 
-STRATUM_N = 125
-STRATA = [
-    {"id": "study_eur", "ancestry": "EUR", "prefix": "EUR"},
-    {"id": "study_afr", "ancestry": "AFR", "prefix": "AFR"},
-]
-
 # Defect slots (1-based sample number inside a stratum).  Sample IDs are
-# "<PREFIX>_S<slot:03d>", so the slot fully determines the ID.
+# "<PREFIX>_S<slot:03d>", so the slot fully determines the ID.  Every stratum
+# declares its own sample count and its own defect slots; a defect a stratum
+# does not carry is None (or empty).
 SLOT_SEX_FAMFEMALE_GENOMALE = 10
 SLOT_SEX_FAMMALE_GENOFEMALE = 11
 SLOT_MZ_A, SLOT_MZ_B = 20, 21
 SLOT_PARENT, SLOT_OFFSPRING = 30, 31
 SLOT_SIB_A, SLOT_SIB_B = 32, 33
 SLOT_MISS_SAMPLE = {40: 0.15, 41: 0.22, 42: 0.05}
+# Deterministic carriers for the planted rare variants.
+SLOT_RARE_CARRIERS = (60, 61)
+
+# The two 125-sample strata carry every defect at the slots above.
+LARGE_DEFECTS = {
+    "sex_famfemale_genomale": SLOT_SEX_FAMFEMALE_GENOMALE,
+    "sex_fammale_genofemale": SLOT_SEX_FAMMALE_GENOFEMALE,
+    "mz": (SLOT_MZ_A, SLOT_MZ_B),
+    "parent_offspring": (SLOT_PARENT, SLOT_OFFSPRING),
+    "full_sibs": (SLOT_SIB_A, SLOT_SIB_B),
+    "miss_samples": SLOT_MISS_SAMPLE,
+    "rare_carriers": SLOT_RARE_CARRIERS,
+    "sparse": None,
+}
+
+# The 12-sample stratum exists to exercise small-n behaviour: one sex
+# mismatch, one duplicate pair and one sample missing a single call at a
+# handful of variants, so that the 1/12 missingness granularity is visible.
+# It carries no relatives beyond the duplicate, no high-missingness sample and
+# no ancestry outlier, and the planted rare variants have no carrier in it.
+SMALL_SLOT_SPARSE = 3
+SMALL_SPARSE_N_VARIANTS = 5
+SMALL_DEFECTS = {
+    "sex_famfemale_genomale": SLOT_SEX_FAMFEMALE_GENOMALE,
+    "sex_fammale_genofemale": None,
+    "mz": (5, 6),
+    "parent_offspring": None,
+    "full_sibs": None,
+    "miss_samples": {},
+    "rare_carriers": (),
+    "sparse": {SMALL_SLOT_SPARSE: SMALL_SPARSE_N_VARIANTS},
+}
+
 SLOT_ANCESTRY_OUTLIER = {
     "study_eur": {50: "EAS", 51: "AFR", 52: "AMR"},
     "study_afr": {50: "EUR", 51: "CSA", 52: "EAS"},
+    "study_csa": {},
 }
-# Deterministic carriers for the planted rare variants.
-SLOT_RARE_CARRIERS = (60, 61)
+
+STRATA = [
+    {"id": "study_eur", "ancestry": "EUR", "prefix": "EUR", "n": 125, "defects": LARGE_DEFECTS},
+    {"id": "study_afr", "ancestry": "AFR", "prefix": "AFR", "n": 125, "defects": LARGE_DEFECTS},
+    {"id": "study_csa", "ancestry": "CSA", "prefix": "CSA", "n": 12, "defects": SMALL_DEFECTS},
+]
 
 # Variant defect blocks: (chrom, minimum position, how many).
 BLOCK_VARMISS_HIGH = (3, 120_000_000, 20)
@@ -331,39 +371,46 @@ def build_reference_samples():
 def build_study_samples(stratum):
     prefix = stratum["prefix"]
     home_pop = stratum["ancestry"]
+    defects = stratum["defects"]
     outliers = SLOT_ANCESTRY_OUTLIER[stratum["id"]]
+    mz = defects["mz"] or (None, None)
+    parent_offspring = defects["parent_offspring"] or (None, None)
+    full_sibs = defects["full_sibs"] or (None, None)
+    sparse = defects["sparse"] or {}
     samples = []
-    for slot in range(1, STRATUM_N + 1):
+    for slot in range(1, stratum["n"] + 1):
         iid = "%s_S%03d" % (prefix, slot)
         sex = 1 if slot % 2 else 2
         fam_sex, bio_sex = sex, sex
         pop = home_pop
         note = ""
 
-        if slot == SLOT_SEX_FAMFEMALE_GENOMALE:
+        if slot == defects["sex_famfemale_genomale"]:
             fam_sex, bio_sex, note = 2, 1, "sex_mismatch_fam_female_geno_male"
-        elif slot == SLOT_SEX_FAMMALE_GENOFEMALE:
+        elif slot == defects["sex_fammale_genofemale"]:
             fam_sex, bio_sex, note = 1, 2, "sex_mismatch_fam_male_geno_female"
-        elif slot == SLOT_MZ_A:
+        elif slot == mz[0]:
             fam_sex = bio_sex = 2
             note = "mz_pair_donor"
-        elif slot == SLOT_MZ_B:
+        elif slot == mz[1]:
             fam_sex = bio_sex = 2
             note = "mz_pair_copy"
-        elif slot == SLOT_PARENT:
+        elif slot == parent_offspring[0]:
             fam_sex = bio_sex = 1
-            note = "parent_of_%s_S%03d" % (prefix, SLOT_OFFSPRING)
-        elif slot == SLOT_OFFSPRING:
+            note = "parent_of_%s_S%03d" % (prefix, parent_offspring[1])
+        elif slot == parent_offspring[1]:
             fam_sex = bio_sex = 2
-            note = "offspring_of_%s_S%03d" % (prefix, SLOT_PARENT)
-        elif slot in (SLOT_SIB_A, SLOT_SIB_B):
-            fam_sex = bio_sex = 1 if slot == SLOT_SIB_A else 2
+            note = "offspring_of_%s_S%03d" % (prefix, parent_offspring[0])
+        elif slot in full_sibs:
+            fam_sex = bio_sex = 1 if slot == full_sibs[0] else 2
             note = "full_sib"
-        elif slot in SLOT_MISS_SAMPLE:
+        elif slot in defects["miss_samples"]:
             # Forced male so that chrY contributes no baseline missingness and
             # the achieved F_MISS equals the planted target exactly.
             fam_sex = bio_sex = 1
-            note = "sample_missingness_%.2f" % SLOT_MISS_SAMPLE[slot]
+            note = "sample_missingness_%.2f" % defects["miss_samples"][slot]
+        elif slot in sparse:
+            note = "sparse_sample_%d_missing_calls" % sparse[slot]
         elif slot in outliers:
             pop = outliers[slot]
             note = "ancestry_outlier_%s" % pop
@@ -408,14 +455,25 @@ def generate_stratum(variants, samples, stratum, seed, defects):
     home_pop = stratum["ancestry"]
     index = {s.iid: i for i, s in enumerate(samples)}
     prefix = stratum["prefix"]
+    slots = stratum["defects"]
 
     def slot_index(slot):
         return index["%s_S%03d" % (prefix, slot)]
 
-    i_mz_a, i_mz_b = slot_index(SLOT_MZ_A), slot_index(SLOT_MZ_B)
-    i_par, i_off = slot_index(SLOT_PARENT), slot_index(SLOT_OFFSPRING)
-    i_sib_a, i_sib_b = slot_index(SLOT_SIB_A), slot_index(SLOT_SIB_B)
-    derived = {i_mz_b, i_off, i_sib_a, i_sib_b}
+    # The derived samples are copied or bred from the independent ones after
+    # every independent draw of a variant, so the random stream of a stratum
+    # depends only on which relationship defects it carries; a stratum without
+    # a defect simply skips that block.
+    mz = slots["mz"]
+    parent_offspring = slots["parent_offspring"]
+    full_sibs = slots["full_sibs"]
+    i_mz_a, i_mz_b = (slot_index(mz[0]), slot_index(mz[1])) if mz else (None, None)
+    i_par, i_off = ((slot_index(parent_offspring[0]), slot_index(parent_offspring[1]))
+                    if parent_offspring else (None, None))
+    i_sib_a, i_sib_b = ((slot_index(full_sibs[0]), slot_index(full_sibs[1]))
+                        if full_sibs else (None, None))
+    derived = {i for i in (i_mz_b, i_off, i_sib_a, i_sib_b) if i is not None}
+    sex_chrom_derived = [i for i in (i_off, i_sib_a, i_sib_b) if i is not None]
 
     geno = []
     for variant in variants:
@@ -432,24 +490,27 @@ def generate_stratum(variants, samples, stratum, seed, defects):
                 col[idx] = draw_diploid(rng, p)
 
         # Monozygotic / duplicate pair: an exact genotype copy.
-        col[i_mz_b] = col[i_mz_a]
+        if mz:
+            col[i_mz_b] = col[i_mz_a]
 
         p_home = variant.freq[home_pop]
         if variant.region == "auto" or variant.region in ("par1", "par2"):
             # Parent-offspring: one allele transmitted, one drawn from the pool.
-            col[i_off] = transmit(rng, col[i_par], p_home)
+            if parent_offspring:
+                col[i_off] = transmit(rng, col[i_par], p_home)
             # Full sibs: two virtual (not-genotyped) parents, both sibs
             # inherit one allele from each.
-            vp1 = draw_diploid(rng, p_home)
-            vp2 = draw_diploid(rng, p_home)
-            for i_sib in (i_sib_a, i_sib_b):
-                a1 = 1 if rng.random() < vp1 / 2.0 else 0
-                a2 = 1 if rng.random() < vp2 / 2.0 else 0
-                col[i_sib] = a1 + a2
+            if full_sibs:
+                vp1 = draw_diploid(rng, p_home)
+                vp2 = draw_diploid(rng, p_home)
+                for i_sib in (i_sib_a, i_sib_b):
+                    a1 = 1 if rng.random() < vp1 / 2.0 else 0
+                    a2 = 1 if rng.random() < vp2 / 2.0 else 0
+                    col[i_sib] = a1 + a2
         else:
             # chrX non-PAR and chrY: drawn independently for the derived
             # samples too (KING relatedness uses autosomes).
-            for i_sib in (i_off, i_sib_a, i_sib_b):
+            for i_sib in sex_chrom_derived:
                 sample = samples[i_sib]
                 if variant.region == "Y":
                     col[i_sib] = draw_haploid_hom(rng, p_home) if sample.bio_sex == 1 else MISSING
@@ -464,11 +525,13 @@ def generate_stratum(variants, samples, stratum, seed, defects):
         for idx in range(len(samples)):
             geno[vi][idx] = 1  # every sample heterozygous
 
+    # A stratum that declares no carriers gets the rare block monomorphic, so
+    # the variants still fall at --maf 0.01, as MAF 0.
     for order, vi in enumerate(defects["rare"]):
         n_carriers = 1 if order < len(defects["rare"]) // 2 else 2
         for idx in range(len(samples)):
             geno[vi][idx] = 0
-        for slot in SLOT_RARE_CARRIERS[:n_carriers]:
+        for slot in slots["rare_carriers"][:n_carriers]:
             geno[vi][slot_index(slot)] = 1
 
     miss_rng = random.Random(seed + 505 + sum(ord(c) for c in stratum["id"]))
@@ -484,7 +547,7 @@ def generate_stratum(variants, samples, stratum, seed, defects):
 
     # ---- planted sample-level missingness --------------------------------
     n_var = len(variants)
-    for slot, target in sorted(SLOT_MISS_SAMPLE.items()):
+    for slot, target in sorted(slots["miss_samples"].items()):
         idx = slot_index(slot)
         target_n = int(round(target * n_var))
         callable_vi = [vi for vi in range(n_var) if geno[vi][idx] != MISSING]
@@ -493,7 +556,27 @@ def generate_stratum(variants, samples, stratum, seed, defects):
         if extra > 0:
             for vi in miss_rng.sample(callable_vi, extra):
                 geno[vi][idx] = MISSING
-    return geno
+
+    # ---- sparse sample: one missing call at a few autosomal variants -------
+    # Drawn after the sample-level missingness so that the strata without a
+    # sparse sample consume exactly the stream they did before it existed.
+    # The variants avoid every planted block, so each one carries exactly one
+    # missing call: 1/n of the samples, which is what makes the missingness
+    # granularity of a small stratum visible.
+    sparse_variants = {}
+    reserved = set()
+    for vis in defects.values():
+        reserved.update(vis)
+    for slot, n_variants in sorted((slots["sparse"] or {}).items()):
+        idx = slot_index(slot)
+        candidates = [vi for vi, v in enumerate(variants)
+                      if v.region == "auto" and vi not in reserved
+                      and geno[vi][idx] != MISSING]
+        chosen = sorted(miss_rng.sample(candidates, n_variants))
+        for vi in chosen:
+            geno[vi][idx] = MISSING
+        sparse_variants[slot] = chosen
+    return geno, sparse_variants
 
 
 # --------------------------------------------------------------------------- #
@@ -552,6 +635,13 @@ def variant_stats(geno_col):
 def sample_f_miss(geno, idx):
     missing = sum(1 for col in geno if col[idx] == MISSING)
     return missing / len(geno)
+
+
+def all_het_exact_p(n):
+    """HWE exact-test probability of every one of ``n`` samples being
+    heterozygous: with n copies of each allele, P(n_AB = n) = 2^n (n!)^2 / (2n)!,
+    which is also the (one-sided) p-value since no table is more extreme."""
+    return 2 ** n * math.factorial(n) ** 2 / math.factorial(2 * n)
 
 
 # --------------------------------------------------------------------------- #
@@ -749,6 +839,104 @@ HWE-conforming data).  `--indep-pairwise 1500 150 0.2` removes only 15 of 3632
 variants -- see the caveat about there being no LD structure.  Each of the five
 `keep/<SUPERPOP>.keep` files yields `--keep: 50 samples remaining`.
 
+### 11. `study_csa` -- the 12-sample stratum
+
+Verified separately, with
+`community.wave.seqera.io/library/plink2:2.0.0a.6.9--e6710830a4b7f0c6` (the
+same PLINK v2.0.0-a.6.9LM build, the image the pipeline pins); plink1.9 was
+not run on this stratum.
+
+```
+plink2 --bfile genotypes/study_csa --freq --missing --hardy --out out_csa
+```
+
+`12 samples (7 females, 5 males)`, `3962 variants`.  The six planted chr6
+rare variants have `ALT_FREQS 0`, `OBS_CT 24`; 236 autosomal variants are
+monomorphic in this stratum (the 6 plants plus 230 by sampling chance) and no
+other autosomal variant has MAF < 0.01, so `--maf 0.01` removes 236.  The
+five sparse-sample variants (`rs1151545`, `rs1311999`, `rs1911972`,
+`rs2167038`, `rs2770893`) each have `MISSING_CT 1`, `F_MISS 0.0833`, and
+`--export A` shows the missing call is `CSA_S003`'s at all five; `CSA_S003`
+itself has `F_MISS 0.00278` (11 of 3962: the 5 planted calls plus 6 that the
+chr3/chr4 blocks assign to it at random).  30 autosomal variants have
+`F_MISS > 0.05`: the 20 chr3 block variants (0.0833-0.25), the 5 chr4
+borderline variants (each exactly one missing call, 0.0833) and the 5
+sparse-sample variants.  The five chr5 HWE plants have `O(HET_A1) 1`,
+`E(HET_A1) 0.5`, `P 0.0018564`, and the smallest autosomal `P` in the stratum
+is 6.7e-4 (`rs2009918`), so `--hwe 1e-10` excludes nothing here.
+
+**Small-sample guards.** plink2 2.0.0a.6.9 refuses to impute allele
+frequencies or LD from fewer than 50 samples: `--check-sex`, `--het` and
+`--pca` stop with `Error: This run requires decent allele frequencies, but
+they aren't being loaded with --read-freq, and less than 50 samples are
+available to impute them from.`, and `--indep-pairwise` stops with `Error:
+This run estimates linkage disequilibrium between variants, but there are less
+than 50 samples to estimate from.`  The overrides are `--bad-freqs` for the
+first three and `--bad-ld` for pruning; a `--read-freq <file>` also lifts the
+frequency guard for the whole run, even when the file covers only the
+autosomes (chrX frequencies are then imputed from the 12 samples without
+further notice).
+
+Sex check:
+
+```
+plink2 --bfile genotypes/study_csa --split-par b38 --make-bed --out p2sx_csa
+plink2 --bfile p2sx_csa --bad-freqs --check-sex max-female-xf=0.2 min-male-xf=0.8 \
+       max-female-ycount=0 min-male-ycount=1 cols=+ycount --out p2cs_csa
+```
+
+`--split-par: 50 chromosome codes changed`, then `--check-sex: 250 chrX
+variants and 30 variants scanned, 1 problem detected`:
+
+```
+FID       IID       PEDSEX SNPSEX STATUS  F  YCOUNT YRATE
+CSA_S010  CSA_S010  2      1      PROBLEM 1  30     1
+```
+
+The females' F is 0.014 to 0.126 (below `max-female-xf` 0.2) and every
+genotype male has F 1 and YCOUNT 30.  `--read-freq` of the stratum's own
+`--freq` output, or of the autosomal CSA-reference frequencies, gives the same
+12 verdicts (F differs in the sixth decimal).  22 monomorphic chrX variants
+are skipped with a warning.
+
+Relatedness:
+
+```
+plink2 --bfile genotypes/study_csa --chr 1-22 --make-king-table --king-table-filter 0.08 --out king_csa
+```
+
+`1 relationship reported (65 filtered out)`:
+
+```
+IID1      IID2      NSNP  HETHET    IBS0  KINSHIP
+CSA_S006  CSA_S005  3623  0.360199  0     0.5
+```
+
+No other pair reaches 0.08.  KING needs no allele frequencies and runs bare
+at n = 12.
+
+Heterozygosity: `--het` bare is refused (above).  `--bad-freqs --het` gives
+mean F -0.046 over the 12 samples (the in-sample frequency estimate is biased
+at n = 12); `--het --read-freq` of the 50 CSA reference samples' `--freq`
+over the 3578 shared same-strand variants gives mean F -0.0006, and the
+reference samples themselves on that basis -0.0078, so a matched reference
+frequency file puts study and reference on one scale.
+
+LD pruning: `--bad-ld --indep-pairwise 1500 150 0.2 --chr 1-22` removes 3459
+of 3632 autosomal variants and keeps 173 (4.8%), on data with no LD structure
+at all: pairwise r^2 over 12 samples is inflated enough to prune almost
+everything.  This is the small-n pruning collapse the stratum exists to
+demonstrate; the 125-sample strata keep 3617 of 3632 with the same settings.
+
+Ancestry, by the pipeline's own projection recipe: reference
+`--maf 0.01 --freq counts --pca 6 allele-wts vcols=chrom,ref,alt` over the
+3578 autosomal variants whose alleles agree between study and reference (the
+54 documented flips excluded), then
+`--score <weights> 2 5 header-read no-mean-imputation variance-standardize --score-col-nums 6-11 --read-freq <counts>`
+for the reference and for `study_csa` alike.  Nearest-centroid assignment on
+PC1-PC4: reference self-assignment 250/250, and all 12 `study_csa` samples
+nearest the CSA centroid (distance 0.011-0.033).
+
 ### Not verified
 
 * **No Nextflow / nf-test run.** These fixtures have not yet been consumed by
@@ -763,6 +951,8 @@ variants -- see the caveat about there being no LD structure.  Each of the five
   and the high-LD exclusion beyond coordinate overlap.
 * **No MAF/HWE/missingness defects in the reference panel**, so a pipeline that
   QCs the reference has nothing to catch there.
+* **`study_csa` was checked with plink2 only** (section 11); the plink1.9
+  route of sections 2 and 8 was not repeated on it.
 """
 
 VERIFICATION = """\
@@ -867,10 +1057,11 @@ def build_readme(ctx):
     for name, n, nm, nf in ctx["sample_summary"]:
         A("| `%s` | %d | %d / %d |" % (name, n, nm, nf))
     A("")
-    A("Study sample IDs are `<PREFIX>_S<nnn>` with `PREFIX` = `EUR`/`AFR` and "
-      "`nnn` = 001-%d; reference sample IDs are `<SUBPOP>_<nnn>`. The numeric "
-      "part of a study ID is stable across regenerations, so the defect IDs "
-      "below never move." % STRATUM_N)
+    A("Study sample IDs are `<PREFIX>_S<nnn>` with %s; reference sample IDs "
+      "are `<SUBPOP>_<nnn>`. The numeric part of a study ID is stable across "
+      "regenerations, so the defect IDs below never move."
+      % ", ".join("`PREFIX` = `%s` and `nnn` = 001-%03d in `%s`"
+                  % (s["prefix"], s["n"], s["id"]) for s in STRATA))
     A("")
 
     # -------------------------------------------------- samplesheet
@@ -907,9 +1098,9 @@ def build_readme(ctx):
       "`FID IID` (space-separated, no header) for that super-population.")
     A("")
     A("Study strata are drawn from their matching super-population frequencies "
-      "(`study_eur` from EUR, `study_afr` from AFR), so a reference-projected "
-      "PCA should place them on top of the matching reference cluster -- except "
-      "for the planted ancestry outliers.")
+      "(%s), so a reference-projected PCA should place them on top of the "
+      "matching reference cluster -- except for the planted ancestry outliers."
+      % ", ".join("`%s` from %s" % (s["id"], s["ancestry"]) for s in STRATA))
     A("")
     A("**Reference/study harmonisation.** Reference and study filesets share "
       "variant ID, position and alleles on all %d autosomal variants, with two "
@@ -920,7 +1111,7 @@ def build_readme(ctx):
       "(e.g. reference `A G` -> study `T C`) while the genotype dosages are "
       "unchanged, which is exactly what a strand flip looks like. All of them "
       "have unambiguous (non-`A/T`, non-`C/G`) allele pairs, so the flip is "
-      "resolvable. Both strata flip the same variant set."
+      "resolvable. Every stratum flips the same variant set."
       % (ctx["n_flipped"], 100.0 * ctx["n_flipped"] / ctx["n_var_auto"]))
     A("* **%d strand-ambiguous variants** carry `A/T` or `C/G` alleles in both "
       "the reference and the study sets (never flipped). These are the ones an "
@@ -934,9 +1125,12 @@ def build_readme(ctx):
     A("## Planted defects")
     A("")
     A("Every ID below is deterministic: the slot number in a study sample ID "
-      "encodes its role, and both strata carry the same slots. Sample-level "
-      "defect IDs are listed per stratum; variant-level defects hit the same "
-      "variant IDs in both strata.")
+      "encodes its role. The two %d-sample strata carry the same slots; the "
+      "%d-sample stratum carries only the defects listed against its IDs. "
+      "Sample-level defect IDs are listed per stratum, for the strata that "
+      "carry the defect; variant-level defects hit the same variant IDs in "
+      "every stratum."
+      % (max(s["n"] for s in STRATA), min(s["n"] for s in STRATA)))
     A("")
     A("### Sample-level")
     A("")
@@ -952,12 +1146,49 @@ def build_readme(ctx):
     for row in ctx["variant_defects"]:
         A("| " + " | ".join(row) + " |")
     A("")
+    A("### Small stratum")
+    A("")
+    for s in ctx["small_strata"]:
+        A("`%s` has %d samples, so every per-sample and per-variant rate is a "
+          "multiple of 1/%d = %.4f. Three consequences, all measured in the "
+          "committed data and none of them defects of the fixture:"
+          % (s["id"], s["n"], s["n"], 1.0 / s["n"]))
+        A("")
+        A("* **One missing call is %.1f%% of the samples**, above `geno` 0.05: "
+          "the %d sparse-sample variants (defect c3) and every variant of the "
+          "chr4 borderline block (defect d2, whose planted 4-6%% rounds to one "
+          "missing call at n = %d) fall at `geno` here, while the borderline "
+          "block survives in the %d-sample strata. A per-variant rate is a "
+          "fraction of the samples, so this granularity is a property of the "
+          "sample count; a per-sample rate (`mind`) is a fraction of the "
+          "variants and is unaffected by it."
+          % (100.0 / s["n"], SMALL_SPARSE_N_VARIANTS, s["n"],
+             max(t["n"] for t in STRATA)))
+        A("* **The HWE plants (defect e) are not detectable at n = %d.** With "
+          "every one of %d samples heterozygous the exact-test p-value is of "
+          "the order of 1e-3 (the all-heterozygous table itself has "
+          "probability %.1e under HWE; plink2's value is in the verification "
+          "below), nowhere near a 1e-10 threshold; `--hwe 1e-10` therefore "
+          "excludes nothing in this stratum."
+          % (s["n"], s["n"], all_het_exact_p(s["n"])))
+        A("* **MAF below 1%% means monomorphic at n = %d** (the smallest "
+          "non-zero MAF is 1/%d = %.4f), so the planted rare variants (defect "
+          "f) are written with no carrier and a number of unplanted variants "
+          "are monomorphic by sampling chance; the measured count below is the "
+          "real total that `--maf 0.01` removes."
+          % (s["n"], 2 * s["n"], 1.0 / (2 * s["n"])))
+        A("")
+        A("Its %d samples also make it the stratum on which the `gwasqc` "
+          "small-n route (reference-anchored sample QC) is exercised: LD "
+          "pruning on so few samples is the failure the route exists to avoid."
+          % s["n"])
+        A("")
     A("### Measured values in the committed data")
     A("")
-    A("| Statistic | `study_eur` | `study_afr` |")
-    A("| --- | --- | --- |")
-    for label, a, b in ctx["measured"]:
-        A("| %s | %s | %s |" % (label, a, b))
+    A("| Statistic | %s |" % " | ".join("`%s`" % s["id"] for s in STRATA))
+    A("| --- | %s |" % " | ".join("---" for _s in STRATA))
+    for row in ctx["measured"]:
+        A("| %s |" % " | ".join(row))
     A("")
 
     # -------------------------------------------------- high LD
@@ -1012,6 +1243,10 @@ def build_readme(ctx):
       "sampled, so their MAF is exact. A handful of *unplanted* variants also "
       "fall below MAF 1% by sampling chance; the measured counts above give "
       "the real totals.")
+    A("* The %d-sample stratum is small by design and behaves as small "
+      "strata do: see *Small stratum* above for what its size does to the "
+      "missingness, HWE and MAF filters."
+      % min(s["n"] for s in STRATA))
     A("")
 
     # -------------------------------------------------- ID appendices
@@ -1099,14 +1334,16 @@ def main():
 
     # ---- study strata ----------------------------------------------------
     stratum_data = {}
+    sparse_by_stratum = {}
     for stratum in STRATA:
         samples = build_study_samples(stratum)
-        geno = generate_stratum(variants, samples, stratum, args.seed, defects)
+        geno, sparse = generate_stratum(variants, samples, stratum, args.seed, defects)
         stem = out / "genotypes" / stratum["id"]
         write_bed(stem.with_suffix(".bed"), geno, len(samples))
         write_bim(stem.with_suffix(".bim"), variants, flip=True)
         write_fam(stem.with_suffix(".fam"), samples)
         stratum_data[stratum["id"]] = (samples, geno)
+        sparse_by_stratum[stratum["id"]] = sparse
 
     # ---- high-LD regions -------------------------------------------------
     write_lines(out / "highld" / "high_ld_regions_b38.bed",
@@ -1126,21 +1363,25 @@ def main():
         verification_body = args.verification.read_text()
     readme = build_readme(readme_context(
         args, out, variants, ref_samples, ref_variants, stratum_data,
-        defects, flip_idx, ambiguous_idx, samplesheet, verification_body))
+        sparse_by_stratum, defects, flip_idx, ambiguous_idx, samplesheet,
+        verification_body))
     (out / "README.md").write_text(readme)
     print("wrote %s" % (out / "README.md"))
 
 
 def readme_context(args, out, variants, ref_samples, ref_variants,
-                   stratum_data, defects, flip_idx, ambiguous_idx,
-                   samplesheet, verification_body):
-    inventory = [
-        ("genotypes/study_eur.bed", "study stratum 1 (EUR-drawn) genotypes"),
-        ("genotypes/study_eur.bim", "study stratum 1 variants"),
-        ("genotypes/study_eur.fam", "study stratum 1 samples"),
-        ("genotypes/study_afr.bed", "study stratum 2 (AFR-drawn) genotypes"),
-        ("genotypes/study_afr.bim", "study stratum 2 variants"),
-        ("genotypes/study_afr.fam", "study stratum 2 samples"),
+                   stratum_data, sparse_by_stratum, defects, flip_idx,
+                   ambiguous_idx, samplesheet, verification_body):
+    inventory = []
+    for number, stratum in enumerate(STRATA, 1):
+        inventory += [
+            ("genotypes/%s.bed" % stratum["id"],
+             "study stratum %d (%s-drawn, %d samples) genotypes"
+             % (number, stratum["ancestry"], stratum["n"])),
+            ("genotypes/%s.bim" % stratum["id"], "study stratum %d variants" % number),
+            ("genotypes/%s.fam" % stratum["id"], "study stratum %d samples" % number),
+        ]
+    inventory += [
         ("reference/ref_panel.bed", "mini reference panel genotypes (autosomes only)"),
         ("reference/ref_panel.bim", "reference panel variants"),
         ("reference/ref_panel.fam", "reference panel samples"),
@@ -1173,49 +1414,77 @@ def readme_context(args, out, variants, ref_samples, ref_variants,
         sum(1 for s in ref_samples if s.fam_sex == 1),
         sum(1 for s in ref_samples if s.fam_sex == 2)))
 
-    def ids(slots):
-        """Slot IDs grouped by stratum: "`EUR_S020` + `EUR_S021`; `AFR_...`"."""
+    def ids(slots_of):
+        """Slot IDs grouped by stratum, for the strata that carry the defect:
+        "`EUR_S020` + `EUR_S021`; `AFR_...`".  ``slots_of`` maps a stratum to
+        its slots, or to nothing when the stratum does not carry the defect."""
         return "; ".join(
             " + ".join("`%s_S%03d`" % (s["prefix"], slot) for slot in slots)
-            for s in STRATA)
+            for s in STRATA for slots in [slots_of(s)] if slots)
+
+    def one(key):
+        return lambda s: [s["defects"][key]] if s["defects"][key] else []
+
+    def pair(key):
+        return lambda s: list(s["defects"][key] or [])
 
     def vids(vis):
         return ", ".join("`%s`" % variants[vi].vid for vi in vis)
 
+    n_y = sum(1 for v in variants if v.region == "Y")
+    no_carrier = [s["id"] for s in STRATA if not s["defects"]["rare_carriers"]]
     sample_defects = [
         ["a1", "Sex mismatch: `.fam` female, genotypes male",
-         ids([SLOT_SEX_FAMFEMALE_GENOMALE]),
+         ids(one("sex_famfemale_genomale")),
          "`.fam` sex = 2; chrX non-PAR calls are hemizygous (no hets) and all "
-         "%d chrY variants are called" % sum(1 for v in variants if v.region == "Y"),
+         "%d chrY variants are called" % n_y,
          "`--check-sex ycount` -> `PROBLEM`, X F ~ 1, YCOUNT high"],
         ["a2", "Sex mismatch: `.fam` male, genotypes female",
-         ids([SLOT_SEX_FAMMALE_GENOFEMALE]),
+         ids(one("sex_fammale_genofemale")),
          "`.fam` sex = 1; chrX non-PAR calls are diploid/heterozygous and every "
          "chrY call is missing",
          "`--check-sex ycount` -> `PROBLEM`, X F ~ 0, YCOUNT 0"],
         ["b1", "Duplicate / MZ pair",
-         ids([SLOT_MZ_A, SLOT_MZ_B]),
-         "the `S021` genotype vector is an exact copy of `S020` (all "
-         "chromosomes)",
+         ids(pair("mz")),
+         "the second sample's genotype vector is an exact copy of the first's "
+         "(all chromosomes)",
          "KING kinship ~ 0.5, IBS0 = 0 -> duplicate/MZ call"],
         ["b2", "First-degree pair (parent-offspring)",
-         ids([SLOT_PARENT, SLOT_OFFSPRING]),
-         "`S031` inherits one autosomal allele from `S030` and one from the "
-         "population pool at every autosomal variant; no pedigree in the `.fam`",
+         ids(pair("parent_offspring")),
+         "the second sample inherits one autosomal allele from the first and "
+         "one from the population pool at every autosomal variant; no pedigree "
+         "in the `.fam`",
          "KING kinship ~ 0.25 with IBS0 ~ 0 -> parent-offspring"],
         ["b3", "First-degree pair (full sibs)",
-         ids([SLOT_SIB_A, SLOT_SIB_B]),
+         ids(pair("full_sibs")),
          "two virtual, non-genotyped parents; both sibs inherit one allele from "
          "each at every autosomal variant",
          "KING kinship ~ 0.25 with IBS0 > 0 -> full sibs"],
         ["c1", "High sample missingness",
-         ids([40, 41]),
+         ids(lambda s: sorted(slot for slot, rate in s["defects"]["miss_samples"].items() if rate > 0.10)),
          "15% and 22% of all calls set missing at random",
          "`--missing` F_MISS > 0.10; removed by any `mind` <= 0.10"],
         ["c2", "Borderline sample missingness",
-         ids([42]),
+         ids(lambda s: sorted(slot for slot, rate in s["defects"]["miss_samples"].items() if rate <= 0.10)),
          "5% of all calls set missing at random",
          "F_MISS ~ 0.05: kept at `mind` 0.10, dropped at `mind` 0.02"],
+        ["c3", "Sparse sample: one missing call at a handful of variants",
+         ids(lambda s: sorted((s["defects"]["sparse"] or {}).keys())),
+         "exactly one genotype set missing at %d autosomal variants outside "
+         "every planted block (%s), which adds %d/%d to the sample's own "
+         "F_MISS (the measured value below includes the calls the chr3/chr4 "
+         "blocks assign to it at random)"
+         % (SMALL_SPARSE_N_VARIANTS,
+            ", ".join(vids(vis) for s in STRATA
+                      for vis in sparse_by_stratum[s["id"]].values()),
+            SMALL_SPARSE_N_VARIANTS, len(variants)),
+         "the sample survives any `mind`; each of the %d variants has F_MISS "
+         "1/n = %.4f in a %d-sample stratum, above `geno` 0.05, so they fall "
+         "at geno although only one call is missing: the 1/n granularity of "
+         "missingness at small n"
+         % (SMALL_SPARSE_N_VARIANTS,
+            1.0 / min(s["n"] for s in STRATA if s["defects"]["sparse"]),
+            min(s["n"] for s in STRATA if s["defects"]["sparse"]))],
         ["h", "Ancestry outliers (wrong super-population)",
          ", ".join("`%s_S%03d` (%s)" % (s["prefix"], slot, pop)
                    for s in STRATA
@@ -1247,7 +1516,10 @@ def readme_context(args, out, variants, ref_samples, ref_variants,
          vids(defects["rare"]),
          "chr6; every sample homozygous A2 except the first 1 (first three "
          "variants) or 2 (last three) of the fixed carriers %s -- "
-         "MAF 1/250 = 0.40%% or 2/250 = 0.80%%" % ids(SLOT_RARE_CARRIERS),
+         "MAF 1/250 = 0.40%% or 2/250 = 0.80%%; no carrier at all in %s, "
+         "where the six variants are monomorphic (MAF 0)"
+         % (ids(lambda s: list(s["defects"]["rare_carriers"])),
+            ", ".join("`%s`" % sid for sid in no_carrier)),
          "`--freq` ALT_FREQS < 0.01 -> removed by `--maf 0.01`"],
         ["g", "Variants inside a listed high-LD interval",
          "see the high-LD table below",
@@ -1258,43 +1530,58 @@ def readme_context(args, out, variants, ref_samples, ref_variants,
     ]
 
     # ---- measured values -------------------------------------------------
+    # One column per stratum; a dash where the stratum does not carry the slot.
     measured = []
 
     def per_stratum(fn):
-        return [fn(*stratum_data[s["id"]]) for s in STRATA]
+        return [fn(*stratum_data[s["id"]], s) for s in STRATA]
 
     def fmt(values, spec="%s"):
-        return [spec % v for v in values]
+        return ["-" if v is None else spec % v for v in values]
+
+    def f_miss_of_slot(samples, geno, slot):
+        idx = next((i for i, s in enumerate(samples)
+                    if s.iid.endswith("_S%03d" % slot)), None)
+        return None if idx is None else sample_f_miss(geno, idx)
 
     for slot in sorted(SLOT_MISS_SAMPLE):
-        vals = per_stratum(lambda samples, geno, slot=slot: sample_f_miss(
-            geno, next(i for i, s in enumerate(samples)
-                       if s.iid.endswith("_S%03d" % slot))))
+        vals = per_stratum(lambda samples, geno, s, slot=slot: (
+            f_miss_of_slot(samples, geno, slot)
+            if slot in s["defects"]["miss_samples"] else None))
         measured.append(("F_MISS of `*_S%03d`" % slot,) + tuple(fmt(vals, "%.4f")))
+    vals = per_stratum(lambda samples, geno, s: (
+        f_miss_of_slot(samples, geno, SMALL_SLOT_SPARSE)
+        if s["defects"]["sparse"] else None))
+    measured.append(("F_MISS of the sparse sample `*_S%03d`" % SMALL_SLOT_SPARSE,)
+                    + tuple(fmt(vals, "%.5f")))
 
-    vals = per_stratum(lambda samples, geno: max(
+    vals = per_stratum(lambda samples, geno, s: max(
         variant_stats(geno[vi])[1] for vi in defects["varmiss_high"]))
     measured.append(("max variant F_MISS in the chr3 block",) + tuple(fmt(vals, "%.4f")))
-    vals = per_stratum(lambda samples, geno: min(
+    vals = per_stratum(lambda samples, geno, s: min(
         variant_stats(geno[vi])[1] for vi in defects["varmiss_high"]))
     measured.append(("min variant F_MISS in the chr3 block",) + tuple(fmt(vals, "%.4f")))
-    vals = per_stratum(lambda samples, geno: "%.4f-%.4f" % (
+    vals = per_stratum(lambda samples, geno, s: "%.4f-%.4f" % (
         min(variant_stats(geno[vi])[1] for vi in defects["varmiss_border"]),
         max(variant_stats(geno[vi])[1] for vi in defects["varmiss_border"])))
     measured.append(("borderline variant F_MISS range",) + tuple(fmt(vals)))
-    vals = per_stratum(lambda samples, geno: "%.4f-%.4f" % (
+    vals = per_stratum(lambda samples, geno, s: "%.4f-%.4f" % (
         min(variant_stats(geno[vi])[0] for vi in defects["rare"]),
         max(variant_stats(geno[vi])[0] for vi in defects["rare"])))
     measured.append(("planted rare-variant MAF range",) + tuple(fmt(vals)))
-    vals = per_stratum(lambda samples, geno: sum(
+    vals = per_stratum(lambda samples, geno, s: sum(
         1 for i, v in enumerate(variants)
         if v.region == "auto" and variant_stats(geno[i])[0] < 0.01))
     measured.append(("autosomal variants with MAF < 1% (planted + chance)",) + tuple(fmt(vals, "%d")))
-    vals = per_stratum(lambda samples, geno: sum(
+    vals = per_stratum(lambda samples, geno, s: sum(
         1 for i, v in enumerate(variants)
         if v.region == "auto" and variant_stats(geno[i])[1] > 0.10))
     measured.append(("autosomal variants with F_MISS > 10%",) + tuple(fmt(vals, "%d")))
-    vals = per_stratum(lambda samples, geno: sum(
+    vals = per_stratum(lambda samples, geno, s: sum(
+        1 for i, v in enumerate(variants)
+        if v.region == "auto" and variant_stats(geno[i])[1] > 0.05))
+    measured.append(("autosomal variants with F_MISS > 5%",) + tuple(fmt(vals, "%d")))
+    vals = per_stratum(lambda samples, geno, s: sum(
         1 for i in range(len(samples)) if sample_f_miss(geno, i) > 0.10))
     measured.append(("samples with F_MISS > 10%",) + tuple(fmt(vals, "%d")))
 
@@ -1335,6 +1622,7 @@ def readme_context(args, out, variants, ref_samples, ref_variants,
         "highld_overlap": highld_overlap,
         "n_in_highld": n_in_highld,
         "n_in_mhc": n_in_mhc,
+        "small_strata": [s for s in STRATA if s["defects"]["sparse"]],
         "verification": verification,
         "id_lists": [
             ("Strand-flipped variants (study alleles complemented)",
