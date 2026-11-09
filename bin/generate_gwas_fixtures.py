@@ -124,6 +124,11 @@ def write_relational_fixtures(
         [["example_quantitative", *common, "", "", "", "", "regenie", "", "", ""]],
     )
     write_csv(
+        relational_dir / "analysis_manifest_preparation_only.csv",
+        ANALYSIS_HEADER,
+        [["example_quantitative", *common, "", "", "", "", "", "", "", ""]],
+    )
+    write_csv(
         relational_dir / "analysis_manifest_binary.csv",
         ANALYSIS_HEADER,
         [

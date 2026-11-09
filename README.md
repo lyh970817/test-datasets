@@ -64,6 +64,7 @@ results/fixtures/
     ├── analysis_manifest_binary.csv
     ├── analysis_manifest_heritability_only.csv
     ├── analysis_manifest_heterogeneous.csv
+    ├── analysis_manifest_preparation_only.csv
     ├── analysis_manifest_quantitative.csv
     ├── cohort_manifest.csv
     ├── method_options_heterogeneous.json
@@ -86,11 +87,11 @@ plink2 --pfile example_all --make-bed --out example_all --hard-call-threshold 0.
 
 The phenotype contains a variable quantitative trait (`QT`) and a binary trait (`BT`) with 113 controls coded as 1 and 87 cases coded as 2. The covariate sidecars provide four full-rank quantitative covariates and one balanced categorical covariate. Sample identifiers and ordering are identical across the VCF, the PLINK derivatives and all three sidecars.
 
-The static relational bundle provides directly inspectable quantitative, binary, association-only, heritability-only, and heterogeneous analysis scenarios. Its URLs use the stable public `nf-core/test-datasets:gwas` paths. The cohort manifest selects the PLINK 2 bundle, filling `pgen`, `psam` and `pvar` and leaving `bed`, `bim` and `fam` empty so exactly one representation is declared; it has no `vcf` column. The GCTA GRM selector includes all 2,200 variants so the dense GRM is estimable for 200 samples. The focused LDAK selector and weight resources contain three valid VCF variant IDs.
+The static relational bundle provides directly inspectable quantitative, binary, association-only, heritability-only, heterogeneous, and preparation-only (no methods) analysis scenarios. Its URLs use the stable public `nf-core/test-datasets:gwas` paths. The cohort manifest selects the PLINK 2 bundle, filling `pgen`, `psam` and `pvar` and leaving `bed`, `bim` and `fam` empty so exactly one representation is declared; it has no `vcf` column. The GCTA GRM selector includes all 2,200 variants so the dense GRM is estimable for 200 samples. The focused LDAK selector and weight resources contain three valid VCF variant IDs.
 
 ## Regeneration and validation
 
-The dimensions, seed, generator, conversion commands, PLINK 2 image, semantic validator, static manifests, and resources are all tracked on this branch. Regenerate the complete 20-file family without downloading source data:
+The dimensions, seed, generator, conversion commands, PLINK 2 image, semantic validator, static manifests, and resources are all tracked on this branch. Regenerate the complete 21-file family without downloading source data:
 
 ```bash
 nextflow run . -profile test
@@ -115,7 +116,7 @@ python3 bin/validate_gwas_fixtures.py \
 
 The validator checks the derived views against the VCF they came from: sample identity and order, variant identity, position and allele coding, and PLINK 1's alternate-first `A1`/`A2` convention.
 
-The regeneration test validates the generated data and requires all 20 generated files, including BGZF compression and the PLINK conversions, to be byte-identical to the committed canonical copies.
+The regeneration test validates the generated data and requires all 21 generated files, including BGZF compression and the PLINK conversions, to be byte-identical to the committed canonical copies.
 
 ## Support
 

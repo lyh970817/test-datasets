@@ -39,6 +39,7 @@ nextflow_pipeline {
                 "relational/analysis_manifest_binary.csv",
                 "relational/analysis_manifest_heritability_only.csv",
                 "relational/analysis_manifest_heterogeneous.csv",
+                "relational/analysis_manifest_preparation_only.csv",
                 "relational/analysis_manifest_quantitative.csv",
                 "relational/cohort_manifest.csv",
                 "relational/method_options_heterogeneous.json",

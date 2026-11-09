@@ -101,6 +101,7 @@ def validate_relational_fixtures(
         "analysis_manifest_binary.csv",
         "analysis_manifest_heritability_only.csv",
         "analysis_manifest_heterogeneous.csv",
+        "analysis_manifest_preparation_only.csv",
         "analysis_manifest_quantitative.csv",
         "cohort_manifest.csv",
         "method_options_heterogeneous.json",
@@ -144,6 +145,9 @@ def validate_relational_fixtures(
         "analysis_manifest_quantitative.csv": {
             "example_quantitative": ("QT", "quantitative", {"regenie"}, set()),
         },
+        "analysis_manifest_preparation_only.csv": {
+            "example_quantitative": ("QT", "quantitative", set(), set()),
+        },
         "analysis_manifest_binary.csv": {
             "example_binary": ("BT", "binary", {"regenie"}, set()),
         },
@@ -181,6 +185,10 @@ def validate_relational_fixtures(
     all_analysis_ids: set[str] = set()
     for filename, expected_rows in expected_analyses.items():
         rows = read_csv(relational_dir / filename, ANALYSIS_HEADER)
+        # The preparation-only manifest is the quantitative scenario without methods, so it deliberately
+        # reuses that analysis ID; every other manifest keeps globally unique IDs.
+        if filename == "analysis_manifest_preparation_only.csv":
+            all_analysis_ids -= {"example_quantitative"}
         require(
             {row["analysis_id"] for row in rows} == set(expected_rows),
             f"{filename}: unexpected analysis IDs",
